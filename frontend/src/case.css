@@ -477,3 +477,33 @@
     margin-left: 0;
   }
 }
+
+/* Care recovery intervention: distinguish an action plan from a resolved barrier. */
+.cp-support-plan {
+  margin-top: 11px;
+  padding: 12px;
+  border: 1px solid #d7e7e5;
+  background: #f7fbfa;
+  border-radius: 10px;
+  display: grid;
+  gap: 7px;
+}
+.cp-support-plan > strong { font-size: 13px; color: #16545b; }
+.cp-support-plan small { color: #526b70; }
+.cp-support-plan p { font-size: 13px; margin: 0; }
+.cp-support-verify { display: grid; gap: 7px; }
+.cp-support-verify label { font-size: 12px; font-weight: 650; color: #304f55; }
+.cp-support-verify textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbdedc;
+  background: #fff;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: #203e44;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.cp-support-verify .cp-btn, .cp-support-plan > .cp-btn { justify-self: start; }
+#care-support { scroll-margin-top: 100px; }

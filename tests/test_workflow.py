@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from datetime import timedelta
@@ -90,7 +91,15 @@ class CareLoopTests(unittest.TestCase):
         self.role("clinician")
         self.act("approve", draft)
         self.act("close", "Reviewed report", 422)
-        self.act("resolve_barrier", "I need a ride to the clinic")
+        self.act("resolve_barrier", "I need a ride to the clinic", 422)
+        self.act("start_support", json.dumps({
+            "label": "I need a ride to the clinic",
+            "intervention": "Coordinate a patient-approved transport option",
+        }))
+        self.act("resolve_barrier", json.dumps({
+            "label": "I need a ride to the clinic",
+            "verification": "Patient confirmed booked transport and attendance.",
+        }))
         self.act("close", "Reviewed visit report VIS-441")
         self.assertEqual(self.case["stage"], 7)
         self.assertFalse(self.case["gaps"])
@@ -141,3 +150,30 @@ class CareLoopTests(unittest.TestCase):
         self.role("clinician")
         self.act("skip_referral", "Direct testing plan")
         self.assertEqual(self.case["referral"], "Direct testing")
+
+    def test_barrier_support_proof_and_permissions(self):
+        self.intake()
+        self.role("coordinator")
+        self.act("barrier", "Interpreter needed for appointment")
+        item = self.case["barriers"][0]
+        self.assertEqual(item["category"], "Language")
+        self.assertIn("interpreter", self.case["gaps"][0]["next"].lower())
+        label = item["label"]
+        plan = json.dumps({"label": label, "intervention": "Arrange a qualified interpreter for the next contact"})
+        resolution = json.dumps({"label": label, "verification": "Patient confirmed interpreter attended the call."})
+        self.act("resolve_barrier", resolution, 422)
+        self.act("start_support", json.dumps({"label": label, "intervention": "Unsafe clinical advice"}), 422)
+        self.role("viewer")
+        self.act("start_support", plan, 403)
+        self.role("coordinator")
+        self.act("start_support", plan)
+        self.assertEqual(self.case["barriers"][0]["support"]["status"], "In progress")
+        self.act("start_support", plan, 422)
+        self.assertIn("Confirm intervention", self.case["gaps"][0]["next"])
+        self.act("resolve_barrier", json.dumps({"label": label, "verification": "Done"}), 422)
+        self.act("resolve_barrier", resolution)
+        item = self.case["barriers"][0]
+        self.assertTrue(item["resolved"])
+        self.assertEqual(item["support"]["status"], "Verified")
+        self.assertIn("confirmed", item["support"]["verification"])
+        self.assertFalse(any(g["key"].startswith("barrier:") for g in self.case["gaps"]))

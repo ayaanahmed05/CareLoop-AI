@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronRight, ClipboardList, HeartPulse, LayoutDashboard, Link2, Menu, Waypoints } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronRight, ClipboardList, HeartPulse, LayoutDashboard, Link2, Menu, Waypoints, HeartHandshake, Braces, BellRing, TrendingUp } from 'lucide-react';
 import { api, type CareCase } from './types';
 import CasePage from './CasePage';
 import Analytics from './Analytics';
+import PatientCompanion from './PatientCompanion';
+import Interoperability from './Interoperability';
+import Operations from './Operations';
+import Impact from './Impact';
 import Intake from './Intake';
 import { Button } from './components/ui/button';
 import { Banner, Metrics, Worklist, Monitor, Recent, Gaps, PageTitle, initials } from './Workspace';
@@ -25,7 +28,7 @@ const nav = [{
   to: '/analytics',
   label: 'Analytics',
   icon: ChartNoAxesCombined
-}];
+}, {to:'/patient',label:'Patient companion',icon:HeartHandshake}, {to:'/fhir',label:'FHIR sandbox',icon:Braces}, {to:'/operations',label:'Escalation center',icon:BellRing}, {to:'/impact',label:'Impact metrics',icon:TrendingUp}];
 function Patient({
   cases,
   role,
@@ -119,7 +122,7 @@ export default function App() {
               {title}
             </b></span>
           <div className="top-actions">
-            <span className="live"><i />Live workspace</span>
+            <span className="live"><i />Fictional demo data</span>
             <span className="separator" />
             <button className="profile" onClick={() => setMenu(!menu)} aria-expanded={menu} aria-label="Choose demo role">
               <span>
@@ -150,15 +153,7 @@ export default function App() {
             void records.refetch();
           }}>Retry connection</Button>
           </section> : !records.data ? <p className="empty">Loading care workspace…</p> : <Routes>
-            <Route path="/" element={<motion.div initial={{
-            opacity: 0,
-            y: 4
-          }} animate={{
-            opacity: 1,
-            y: 0
-          }} transition={{
-            duration: .18
-          }}>
+            <Route path="/" element={<div className="page-enter">
               <div className="date-line">
                 <span><span className="pulse" />Operations workspace</span>
                 <span>
@@ -182,7 +177,7 @@ export default function App() {
                 <summary><ChartNoAxesCombined size={17}/> Operational analytics <ChevronDown size={14}/></summary>
                 <Analytics cases={cases}/>
               </details>
-            </motion.div>} />
+            </div>} />
             <Route path="/worklist" element={<>
               <PageTitle title="Patient worklist" sub="Find a case, review its next step, and record follow-up." />
               {role === 'clinician' && <Button asChild className="intake-link">
@@ -190,6 +185,11 @@ export default function App() {
               </Button>}
               <Worklist cases={cases} />
             </>} />
+            <Route path="/patient" element={<PatientCompanion cases={cases} role={role} refresh={() => qc.invalidateQueries({queryKey:['cases']})} />} />
+            <Route path="/patient/:id" element={<PatientCompanion cases={cases} role={role} refresh={() => qc.invalidateQueries({queryKey:['cases']})} />} />
+            <Route path="/fhir" element={<Interoperability role={role} refresh={() => qc.invalidateQueries({queryKey:['cases']})} />} />
+            <Route path="/operations" element={<Operations role={role} refresh={() => qc.invalidateQueries({queryKey:['cases']})} />} />
+            <Route path="/impact" element={<Impact refreshKey={cases.reduce((n,c)=>n+c.version,0)} />} />
             <Route path="/intake" element={<Intake role={role} refresh={() => qc.invalidateQueries({
             queryKey: ['cases']
           })} />} />

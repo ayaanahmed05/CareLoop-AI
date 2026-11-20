@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from .language import barrier_category
+from .navigation import recommended, start_support, verify_support
 from .settings import ACK_DAYS, REFERRAL_DAYS, SCHEDULE_DAYS, OWNERS, STAGES
 
 
@@ -22,6 +23,8 @@ def age(value):
 
 def gaps(c):
     if c["stage"] == 7:
+        if c.get("fhir_source", {}).get("review_required"):
+            return [dict(key="fhir-review", title="Closed case: report changed", reason="A synthetic diagnostic report update arrived after closure.", next="Clinician must reopen the case and review the updated source.", days=0, review=True, escalated=False)]
         return []
     result = []
 
@@ -51,6 +54,8 @@ def gaps(c):
             since,
             True,
         )
+    if c.get("fhir_source", {}).get("review_required"):
+        flag("fhir-review", "FHIR update needs clinician review", "A synthetic diagnostic report was amended, corrected or invalidated.", "Request clinician review; do not automatically change the follow-up plan.", since, True)
     if c["urgency"] == "Urgent":
         flag(
             "urgent",
@@ -118,7 +123,7 @@ def gaps(c):
                 "barrier:" + b["label"],
                 b["label"] + " barrier",
                 "The patient reported an unresolved access barrier.",
-                "Coordinate assistance and confirm resolution.",
+                ("Confirm intervention and evidence" if b.get("support") else recommended(b)),
                 b["at"],
             )
     if (
@@ -145,10 +150,12 @@ def check(ok, msg, status=422):
 
 def action(c, kind, value, role, actor):
     check(role in ("coordinator", "clinician"), "Read-only session.", 403)
-    if kind in ("urgency", "close", "skip_referral", "approve", "discard", "reopen"):
+    if kind in ("urgency", "close", "skip_referral", "approve", "discard", "reopen", "review_fhir"):
         check(role == "clinician", "A clinician must perform this action.", 403)
     s = c["stage"]
     check(s != 7 or kind == "reopen", "Reopen this closed case before making changes.")
+    if c.get("fhir_source", {}).get("review_required") and kind not in ("review_fhir", "note", "escalate", "assign", "reopen"):
+        check(False, "A changed or cancelled FHIR report requires clinician review before continuing the care pathway.")
     at = stamp()
     dest = None
     label = ""
@@ -172,11 +179,13 @@ def action(c, kind, value, role, actor):
         )
         dest = 4
         c.update(referral="Sent", provider=value, ref_at=at)
+        c["handoff"] = dict(provider=value, sent_at=at, status="Pending", responded_at="", nudges=[], owner=actor)
         label = "Referral sent"
     elif kind in ("accept", "reject"):
         check(s == 4 and c["referral"] == "Sent", "A sent referral is required.")
         check(kind == "accept" or value, "Record the rejection reason.")
         c.update(referral="Accepted" if kind == "accept" else "Rejected", ref_at=at)
+        c.setdefault("handoff", {}).update(status=c["referral"], responded_at=at, provider=c["provider"])
         label = "Referral " + c["referral"].lower()
     elif kind == "skip_referral":
         check(
@@ -218,6 +227,7 @@ def action(c, kind, value, role, actor):
         check(
             s == 6
             and c["owner"]
+            and not c.get("fhir_source", {}).get("review_required")
             and c["evidence"]
             and not any(not b["resolved"] for b in c["barriers"])
             and not any(
@@ -235,6 +245,16 @@ def action(c, kind, value, role, actor):
             referral="Not sent", provider="", appointment="", evidence="", missed=False
         )
         label = "Case reopened for consultation"
+    elif kind == "handoff_nudge":
+        from .flow_v2 import handoff_nudge
+        handoff_nudge(c, actor, value)
+        return
+    elif kind == "review_fhir":
+        check(c.get("fhir_source", {}).get("review_required"), "No pending FHIR review")
+        check(len(value) >= 12, "Document the clinician's report review (12+ characters)")
+        c["fhir_source"]["review_required"] = False
+        c["fhir_source"]["review_note"] = value
+        label = "Synthetic FHIR report reviewed by clinician"
     elif kind == "barrier":
         check(
             value
@@ -248,14 +268,12 @@ def action(c, kind, value, role, actor):
             dict(label=value, category=barrier_category(value), at=at, resolved=False)
         )
         label = "Patient reported barrier"
+    elif kind == "start_support":
+        value = start_support(c, value, actor, at)
+        label = "Care navigator support started"
     elif kind == "resolve_barrier":
-        b = next(
-            (b for b in c["barriers"] if b["label"] == value and not b["resolved"]),
-            None,
-        )
-        check(b, "No open barrier matches.")
-        b["resolved"] = True
-        label = "Barrier resolution confirmed"
+        value = verify_support(c, value, actor, at)
+        label = "Barrier resolution verified"
     elif kind == "escalate":
         check(
             any(g["key"] == value and not g["escalated"] for g in gaps(c)),

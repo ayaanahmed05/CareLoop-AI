@@ -226,6 +226,18 @@ export default function Analytics({
           {data.barriers.map(([label, count]) => <Measure key={label} label={label} value={String(count)} width={100 * count / data.barriers[0][1]} color="#5a9399" />)}
         </ol> : <Empty>No unresolved barriers reported.</Empty>}
       </Panel>
+      <Panel title="Care recovery interventions" detail="Auditable support actions for patient-reported barriers; all demo data is fictional">
+        {(() => {
+          const all = cases.flatMap(c => c.barriers);
+          const started = all.filter(b => b.support);
+          const verified = started.filter(b => b.resolved && b.support?.status === 'Verified');
+          return <div className="ca-bars"><ol className="ca-bars">
+            <Measure label="Barriers reported" value={String(all.length)} width={100} color="#7899b2" />
+            <Measure label="Support plans started" value={String(started.length)} width={all.length ? 100 * started.length / all.length : 0} color="#47a7a1" />
+            <Measure label="Staff-attested resolutions" value={String(verified.length)} width={all.length ? 100 * verified.length / all.length : 0} color="#24807f" />
+          </ol><p className="ca-empty">Fictional demo records only. Verification is a staff-entered note, not an independently checked provider record.</p></div>;
+        })()}
+      </Panel>
       <Panel title="Time between stages" detail="Average elapsed time for recorded adjacent stage transitions">
         {intervals.length ? <ol className="ca-bars ca-times">
           {intervals.map(({
