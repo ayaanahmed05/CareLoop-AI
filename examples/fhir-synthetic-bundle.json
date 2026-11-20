@@ -1,0 +1,10 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "meta": {"tag": [{"code": "synthetic-demo"}]},
+  "entry": [
+    {"resource": {"resourceType": "Patient", "id": "demo-patient-101", "name": [{"given": ["Demo"], "family": "Patient"}]}},
+    {"resource": {"resourceType": "Observation", "id": "demo-observation-101", "status": "final", "code": {"text": "Synthetic flagged screening"}, "valueString": "Example result: not a clinical interpretation"}},
+    {"resource": {"resourceType": "DiagnosticReport", "id": "demo-report-101", "status": "final", "issued": "2026-11-19T11:00:00Z", "subject": {"reference": "Patient/demo-patient-101"}, "code": {"text": "Colorectal screening"}, "result": [{"reference": "Observation/demo-observation-101"}]}}
+  ]
+}

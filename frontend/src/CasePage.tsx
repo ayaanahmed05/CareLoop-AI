@@ -97,6 +97,8 @@ const commands: Record<string, Command> = {
     label: 'Approve direct appointment pathway',
     field: 'Clinician rationale'
   },
+  review_fhir: {label:'Confirm review of amended FHIR report',field:'Clinician review note',placeholder:'Describe the review and decision (12+ characters)'},
+  handoff_nudge: {label:'Document provider follow-up',field:'Provider contact note',placeholder:'Record the fictional receiving office follow-up'},
   reopen: {
     label: 'Reopen case',
     field: 'Reason for reopening'
@@ -138,7 +140,7 @@ function allowed(c: CareCase, role: string) {
   if (c.stage === 2) actions.push('consult');
   if (c.stage === 3 || c.stage === 4 && referral === 'Rejected') actions.push('refer');
   if (c.stage === 3 && clinician) actions.push('skip_referral');
-  if (c.stage === 4 && referral === 'Sent') actions.push('accept', 'reject');
+  if (c.stage === 4 && referral === 'Sent') actions.push('accept', 'reject', 'handoff_nudge');
   if (c.stage === 4 && ['Accepted', 'Direct testing'].includes(referral)) actions.push('schedule');
   if (c.stage === 5) {
     if (!c.missed) actions.push('complete');
@@ -146,10 +148,9 @@ function allowed(c: CareCase, role: string) {
     actions.push('schedule');
   }
   if (c.stage === 6 && clinician && c.owner && c.evidence && !c.barriers.some(b => !b.resolved) && !c.drafts.some(d => !d.approved && !d.discarded)) actions.push('close');
-  if (c.barriers.some(b => !b.resolved)) actions.push('resolve_barrier');
   actions.push('barrier', 'note');
   if (c.owner) actions.push('assign');
-  if (clinician) actions.push('urgency');
+  if (clinician) {actions.push('urgency');if (c.fhir_source?.review_required) actions.push('review_fhir');}
   return actions;
 }
 function gapAction(gap: Gap, options: string[]) {
@@ -173,6 +174,7 @@ function CaseWorkspace({
   const [question, setQuestion] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [barrierProof, setBarrierProof] = useState<Record<string, string>>({});
   const [chatError, setChatError] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const formRef = useRef<HTMLDivElement>(null);
@@ -251,6 +253,7 @@ function CaseWorkspace({
   const currentEvents = lastReopen < 0 ? c.events : c.events.filter((e, i) => i >= lastReopen || e.stage !== null && e.stage < 3);
   return <article className="case-page">
       <Link className="cp-back" to="/"><ArrowLeft size={15} /> Coordination overview</Link>
+      <div className="v2-case-action"><Link to={'/patient/'+c.id}>Simulate patient response →</Link><Link to="/operations">Escalation queue →</Link><Link to="/fhir">FHIR demo →</Link></div>
       <header className="cp-identity">
         <div className="cp-avatar" aria-hidden="true">
           {initials}
@@ -279,6 +282,8 @@ function CaseWorkspace({
               {meta('Screened on', stamp(c.created))}
               {meta('Care owner', c.owner || 'Unassigned')}
               {meta('Follow-up target', stamp(c.due))}
+              {meta('FHIR source', c.fhir_source ? c.fhir_source.report_status + (c.fhir_source.review_required ? ' · clinician review required' : ' · reviewed') : 'Not an FHIR import')}
+              {meta('Handoff owner', c.handoff?.owner || c.owner || 'Unassigned')}
               {meta('Referral status', [c.referral, c.provider].filter(Boolean).join(' · ') || 'No referral recorded')}
               {meta(c.stage >= 6 ? 'Recorded appointment' : 'Appointment', c.appointment ? stamp(c.appointment, true) + (c.missed ? ' · Missed' : '') : 'No appointment on record')}
             </dl>
@@ -444,15 +449,15 @@ function CaseWorkspace({
               </p>
               <p className="cp-next"><strong>Next step</strong> {g.next}</p>
               <div className="cp-row">
-                {options.length > 0 && <button className="cp-link" onClick={() => jump(gapAction(g, options), g.key.startsWith('barrier:') ? g.key.slice(8) : '')}>Address gap <ArrowRight size={13} /></button>}
+                {g.key.startsWith('barrier:') ? <a className="cp-link" href="#care-support">Open care plan <ArrowRight size={13} /></a> : options.length > 0 && <button className="cp-link" onClick={() => jump(gapAction(g, options))}>Address gap <ArrowRight size={13} /></button>}
                 {g.escalated ? <span className="cp-badge warm">Escalated</span> : role !== 'viewer' && <button disabled={busy || chatBusy} className="cp-link" onClick={() => void record('escalate', g.key)}>Escalate</button>}
               </div>
             </div>)}
           </section>
-          <section className="cp-card cp-pad">
+          <section className="cp-card cp-pad" id="care-support">
             <div className="cp-heading">
               <CalendarDays />
-              <h2>Access barriers</h2>
+              <h2>Care recovery plans</h2>
             </div>
             {c.barriers.length === 0 ? <p className="cp-empty">No barriers recorded.</p> : c.barriers.map((b, i) => <div className="cp-barrier" key={i}>
               <h3>
@@ -460,6 +465,19 @@ function CaseWorkspace({
               </h3>
               {b.category && <small>Assisted category · {b.category}</small>}
               <small>{b.resolved ? 'Resolved' : 'Open'} · Reported {stamp(b.at)}</small>
+              {b.support ? <div className="cp-support-plan">
+                <strong>Action: {b.support.intervention}</strong>
+                <small>Owner: {b.support.owner} · {b.support.status}</small>
+                {b.support.verification && <p><strong>Verification:</strong> {b.support.verification}</p>}
+                {!b.resolved && role !== 'viewer' && <div className="cp-support-verify">
+                  <label htmlFor={'proof-' + i}>Confirmation from patient or provider</label>
+                  <textarea id={'proof-' + i} rows={2} maxLength={500} placeholder="E.g. Patient confirmed transport is arranged; reference to navigator follow-up." value={barrierProof[b.label] || ''} onChange={e => setBarrierProof(previous => ({ ...previous, [b.label]: e.target.value }))}/>
+                  <button className="cp-btn primary" disabled={busy || chatBusy || (barrierProof[b.label] || '').trim().length < 12} onClick={() => void record('resolve_barrier', JSON.stringify({label: b.label, verification: barrierProof[b.label]}))}><Check size={14}/> Verify barrier resolved</button>
+                </div>}
+              </div> : !b.resolved && role !== 'viewer' && <div className="cp-support-plan">
+                <p><strong>Recommended next action:</strong> {c.gaps.find(g => g.key === 'barrier:' + b.label)?.next || 'Arrange care navigator review'}</p>
+                <button className="cp-btn" disabled={busy || chatBusy} onClick={() => void record('start_support', JSON.stringify({label: b.label, intervention: c.gaps.find(g => g.key === 'barrier:' + b.label)?.next || 'Arrange a care navigator call to identify support needs'}))}>Start support plan <ArrowRight size={13}/></button>
+              </div>}
             </div>)}
           </section>
           {c.drafts.length > 0 && <section className="cp-card cp-pad">

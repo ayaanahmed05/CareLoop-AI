@@ -53,9 +53,9 @@ function HeroArt() {
 export function Banner() {
   return <section className="hero">
       <div className="hero-copy">
-        <div className="eyebrow"><span className="pulse" />CLINICAL OPERATIONS</div>
+        <div className="eyebrow"><span className="pulse" />CARELOOP AI 2.0 · SYNTHETIC DEMO</div>
         <h1>Coordination overview</h1>
-        <p>From screening to follow-up — no patient falls through the cracks.</p>
+        <p>From stalled screenings to supported recovery — with accountable care handoffs.</p>
       </div>
       <HeroArt />
     </section>;

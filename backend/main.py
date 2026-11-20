@@ -13,6 +13,9 @@ from .settings import DATABASE, ROOT, OWNERS
 from .seed import records
 from .workflow import gaps, action, check, stamp
 from .copilot import respond
+from .flow_v2 import patient_reply, escalation_queue, escalation_apply
+from .fhir_demo import import_case, read_bundle, export_bundle
+from .impact import summarize
 
 engine = create_engine(
     "sqlite:///" + DATABASE, connect_args={"check_same_thread": False, "timeout": 10}
@@ -35,7 +38,19 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="CareLoop AI", lifespan=lifespan)
+app = FastAPI(title="CareLoop AI 2.0 — Synthetic Hackathon Demo", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def demo_security_headers(request: Request, call_next):
+    # Defense in depth for the demonstration; this is not a production identity system.
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 class Login(BaseModel):
@@ -46,6 +61,32 @@ class Action(BaseModel):
     kind: str
     value: str = Field(default="", max_length=2000)
     version: int
+
+
+class PatientReply(BaseModel):
+    response: str
+    language: str = "en"
+    channel: str = "portal"
+    consent: bool = False
+    note: str = Field(default="", max_length=160)
+    version: int
+
+
+class FHIRImport(BaseModel):
+    bundle: dict
+    follow_up: str = Field(min_length=5, max_length=500)
+    urgency: str = "Routine"
+    owner: str = OWNERS[0]
+    due_days: int = Field(default=14, ge=1, le=90)
+    confirm_synthetic: str
+
+
+class DemoReset(BaseModel):
+    confirmation: str
+
+
+class EscalationRun(BaseModel):
+    dry_run: bool = True
 
 
 class Question(BaseModel):
@@ -230,6 +271,100 @@ def ask(id: str, data: Question, req: Request):
     )
     return save(c, data.version)
 
+
+
+@app.post("/api/demo/reset")
+def reset_demo(data: DemoReset, req: Request):
+    check(account(req) == "clinician", "Clinician demo role required to reset", 403)
+    check(data.confirmation == "RESET-SYNTHETIC-DEMO", "Explicit reset confirmation required")
+    with engine.begin() as con:
+        con.execute(text("DELETE FROM cases"))
+        for c in records():
+            con.execute(text("INSERT INTO cases VALUES (:id,1,:data)"), dict(id=c["id"], data=json.dumps(c)))
+    return {"status":"reset", "count":30, "note":"All fictional cases were reseeded; no patient records exist in this prototype."}
+
+
+@app.get("/api/impact")
+def impact(req: Request):
+    account(req)
+    with engine.connect() as con:
+        rows = [json.loads(row) for row in con.execute(text("SELECT data FROM cases ORDER BY id")).scalars()]
+    return summarize(rows)
+
+
+@app.get("/api/escalations")
+def escalations(req: Request):
+    account(req)
+    with engine.connect() as con:
+        rows = [json.loads(row) for row in con.execute(text("SELECT data FROM cases ORDER BY id")).scalars()]
+    return dict(queue=escalation_queue(rows), mode="Computed on demand; no background job or real messages")
+
+
+@app.post("/api/escalations/run")
+def run_escalation(data: EscalationRun, req: Request):
+    role = account(req)
+    check(role != "viewer", "Read-only session.", 403)
+    with engine.begin() as con:
+        rows = [(id, ver, json.loads(blob)) for id,ver,blob in con.execute(text("SELECT id,version,data FROM cases ORDER BY id"))]
+        pending = escalation_queue([c for _,_,c in rows])
+        if data.dry_run:
+            return dict(dry_run=True, count=len(pending), queued=pending, message="Preview only; no messages sent")
+        updates=[]
+        bycase={}
+        for item in pending:
+            bycase.setdefault(item['case_id'],[]).append(item['gap'])
+        for id,ver,c in rows:
+            updated=escalation_apply(c, bycase.get(id,[]))
+            if updated:
+                c['version']=ver+1
+                result=con.execute(text("UPDATE cases SET version=:v,data=:d WHERE id=:id AND version=:old"),
+                    dict(v=ver+1,d=json.dumps(c),id=id,old=ver))
+                check(result.rowcount == 1, "Conflict while running escalation; retry",409)
+                updates.extend([dict(case_id=id,gap=k) for k in updated])
+    return dict(dry_run=False, count=len(updates), queued=updates, message="Recorded in-app escalation events only; no outbound messages sent")
+
+
+@app.post("/api/cases/{id}/patient-reply")
+def simulated_patient_response(id: str, data: PatientReply, req: Request):
+    check(account(req) != "viewer", "Read-only session.",403)
+    c=load(id)
+    check(c['version'] == data.version, "Record changed. Refresh and try again.",409)
+    patient_reply(c,data.model_dump())
+    return save(c,data.version)
+
+
+@app.post("/api/fhir/import")
+def import_fhir(data: FHIRImport, req: Request):
+    check(account(req) == 'clinician', 'Only a clinician demo role can approve a synthetic import.',403)
+    incoming = import_case(data.bundle,data.model_dump())
+    id = incoming['id']
+    with engine.begin() as con:
+        previous = con.execute(text("SELECT version,data FROM cases WHERE id=:id"), dict(id=id)).first()
+        if previous:
+            version,blob=previous
+            c=json.loads(blob)
+            check(c.get('fhir_source',{}).get('report_id') == incoming['fhir_source']['report_id'], 'FHIR identifier collision',409)
+            prev = c['fhir_source']
+            status=incoming['fhir_source']['report_status']
+            issued=incoming['fhir_source']['report_issued']
+            incoming_hash = incoming['fhir_source']['fingerprint']
+            if prev.get('fingerprint') == incoming_hash:
+                return dict(status='duplicate', case=present(c))
+            prev.update(report_status=status, report_issued=issued, fingerprint=incoming_hash, review_required=True)
+            c['events'].append(dict(at=stamp(),stage=None,label='Synthetic FHIR report update received',actor='FHIR demo importer',note=f'Report {status}; clinician review required. Existing clinical plan preserved.'))
+            c['version']=version+1
+            changed=con.execute(text("UPDATE cases SET version=:new,data=:data WHERE id=:id AND version=:old"),
+                                dict(new=version+1,data=json.dumps(c),id=id,old=version))
+            check(changed.rowcount==1,'Concurrent case edit; refresh and retry',409)
+            return dict(status='review_required',case=present(c))
+        con.execute(text("INSERT INTO cases VALUES (:id,1,:data)"),dict(id=id,data=json.dumps(incoming)))
+    return dict(status='created',case=present(incoming))
+
+
+@app.get("/api/cases/{id}/fhir/export")
+def fhir_export(id: str, req: Request):
+    account(req)
+    return export_bundle(load(id))
 
 dist = ROOT / "frontend/dist"
 if dist.is_dir():

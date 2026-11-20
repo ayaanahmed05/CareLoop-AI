@@ -25,11 +25,24 @@ export type CareCase = {
   missed?: boolean;
   evidence: string;
   version: number;
+  fhir_source?: {report_id:string;report_status:string;review_required:boolean;review_note?:string};
+  handoff?: {provider:string;sent_at:string;status:string;responded_at?:string;nudges?:{at:string;by:string;note:string}[];owner?:string};
+  patient_preferences?: {language:string;channel:string;consent:boolean};
+  patient_replies?: {at:string;response:string;note:string;simulated:boolean}[];
   barriers: {
     label: string;
     category?: string;
     resolved: boolean;
     at: string;
+    support?: {
+      intervention: string;
+      owner: string;
+      started: string;
+      status: 'In progress' | 'Verified';
+      verified_at: string;
+      verification: string;
+      verified_by?: string;
+    };
   }[];
   events: {
     at: string;
